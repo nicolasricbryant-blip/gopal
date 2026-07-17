@@ -1,7 +1,7 @@
 // sw.js — service worker: cache-first app shell + MediaPipe wasm/model for offline use.
 // Versioned cache name — bump CACHE_VERSION whenever shell files change.
 
-const CACHE_VERSION = 'gopal-v2';
+const CACHE_VERSION = 'gopal-v3';
 const SHELL_FILES = [
   './',
   './index.html',
@@ -68,7 +68,11 @@ self.addEventListener('fetch', (event) => {
     return; // let the browser handle it normally (network only)
   }
 
-  if (isMediaPipeAsset(url) || isGoogleFontAsset(url) || SHELL_FILES.some((f) => url.endsWith(f.replace('./', '')))) {
+  // Note: the './' root entry must be excluded — it maps to the empty string,
+  // and url.endsWith('') is true for every URL, which would force ALL requests
+  // through cacheFirst. The root document is matched by its trailing slash below.
+  const isShellFile = url.endsWith('/') || SHELL_FILES.some((f) => f !== './' && url.endsWith(f.replace('./', '')));
+  if (isMediaPipeAsset(url) || isGoogleFontAsset(url) || isShellFile) {
     event.respondWith(cacheFirst(request));
     return;
   }

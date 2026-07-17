@@ -1,5 +1,5 @@
 {
-  "id": "/",
+  "id": "./",
   "name": "GoPal 2.0 — Anti-Drowsiness Co-Pilot",
   "short_name": "GoPal",
   "description": "Phone-only anti-drowsiness co-pilot: on-device face monitoring, voice check-ins, and family alerts.",
