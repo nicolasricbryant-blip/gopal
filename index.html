@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#020617" />
+<meta name="description" content="GoPal — phone-only anti-drowsiness co-pilot: on-device face monitoring, voice check-ins, and family alerts." />
+<title>GoPal 2.0</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="assets/icons/icon-192.png" />
+<link rel="apple-touch-icon" href="assets/icons/icon-192.png" />
+<link rel="stylesheet" href="css/main.css" />
+</head>
+<body>
+<div id="app">
+
+  <div id="unsupported-banner" class="unsupported-banner" role="alert"></div>
+
+  <header class="topbar">
+    <span class="brand">GoPal<small>anti-drowsiness co-pilot</small></span>
+    <span id="online-indicator" title="Connection status" aria-hidden="true"></span>
+  </header>
+
+  <main>
+
+    <!-- ===== MONITOR SCREEN ===== -->
+    <section id="screen-monitor" class="screen screen--active" data-screen="monitor" aria-label="Monitor">
+      <div class="monitor-stage">
+        <video id="camera-feed" class="camera-feed" autoplay playsinline muted></video>
+        <div id="monitor-placeholder" class="monitor-stage__placeholder">
+          Camera preview appears here once a session starts.
+        </div>
+
+        <div id="status-banner" class="status-banner status-banner--alert" aria-live="polite">
+          <svg id="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="9"></circle>
+            <path d="M9 12l2 2 4-4"></path>
+          </svg>
+          <span class="status-banner__text">
+            <span id="status-text" class="status-banner__state">ALERT</span>
+            <span id="status-sub" class="status-banner__sub">Session not started</span>
+          </span>
+        </div>
+
+        <div id="mic-indicator" class="mic-indicator" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="2" width="6" height="11" rx="3"></rect>
+            <path d="M5 10a7 7 0 0 0 14 0"></path>
+            <path d="M12 17v4"></path>
+          </svg>
+        </div>
+
+        <div class="readouts">
+          <div class="readout-chip"><span class="readout-chip__label">EAR</span><span id="ear-readout" class="readout-chip__value">—</span></div>
+          <div class="readout-chip"><span class="readout-chip__label">PERCLOS</span><span id="perclos-readout" class="readout-chip__value">—</span></div>
+          <div class="readout-chip"><span class="readout-chip__label">FPS</span><span id="fps-readout" class="readout-chip__value">—</span></div>
+        </div>
+      </div>
+
+      <p id="assistant-caption" class="assistant-caption">GoPal will check in here during a session.</p>
+
+      <a id="sms-alert-btn" class="btn btn--danger btn--block sms-alert-btn" href="#" target="_blank" rel="noopener">
+        Send SOS text to emergency contacts
+      </a>
+
+      <button id="session-btn" class="btn btn--primary" type="button">Start Session</button>
+    </section>
+
+    <!-- ===== DASHBOARD SCREEN ===== -->
+    <section id="screen-dashboard" class="screen" data-screen="dashboard" aria-label="Dashboard">
+      <h2>Live Session</h2>
+      <div id="live-tiles" class="stat-grid">
+        <p class="empty-state">Start a session on Monitor to see live stats.</p>
+      </div>
+
+      <h3 class="section-title">Event Log</h3>
+      <div id="event-log" class="event-log"></div>
+
+      <h3 class="section-title">Last Session Summary</h3>
+      <div id="session-summary"></div>
+
+      <h3 class="section-title">Session History</h3>
+      <canvas id="history-chart" width="600" height="140"></canvas>
+      <div id="session-history" style="margin-top:10px;"></div>
+
+      <div class="field-row" style="margin-top:16px;">
+        <button id="csv-export-btn" class="btn btn--sm" type="button">Export CSV</button>
+        <button id="clear-history-btn" class="btn btn--sm btn--ghost" type="button">Clear History</button>
+      </div>
+    </section>
+
+    <!-- ===== SETTINGS SCREEN ===== -->
+    <section id="screen-settings" class="screen" data-screen="settings" aria-label="Settings">
+      <h2>Settings</h2>
+
+      <div class="field">
+        <label for="driver-name">Driver name</label>
+        <input type="text" id="driver-name" placeholder="Optional — used in alerts" autocomplete="name" />
+        <span class="helper">Shown in Telegram/SMS alerts so contacts know who they're for.</span>
+      </div>
+
+      <div class="field">
+        <label>Eye-closure calibration</label>
+        <div class="field-row">
+          <button id="calibrate-btn" class="btn btn--sm" type="button">Recalibrate (5s)</button>
+          <span id="calibration-status" class="helper" style="align-self:center;">Not calibrated — using default threshold.</span>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="stt-lang">Voice language</label>
+        <select id="stt-lang">
+          <option value="en-US">English (US)</option>
+          <option value="fil-PH">Filipino</option>
+        </select>
+        <span class="helper">Used for both listening (speech-to-text) and speaking (text-to-speech).</span>
+      </div>
+
+      <div class="field">
+        <label for="tts-rate">Assistant speech rate</label>
+        <input type="range" id="tts-rate" min="0.7" max="1.4" step="0.1" />
+      </div>
+
+      <div class="field">
+        <label for="volume">Alert volume</label>
+        <input type="range" id="volume" min="0" max="1" step="0.05" />
+      </div>
+
+      <div class="field">
+        <label for="llm-provider">Conversation brain</label>
+        <select id="llm-provider">
+          <option value="none">Scripted only (offline, no key needed)</option>
+          <option value="gemini">Gemini (Google AI Studio key)</option>
+          <option value="claude">Claude (Anthropic key)</option>
+        </select>
+        <span class="helper">Falls back to the scripted dialogue bank automatically if offline, no key, or the request times out.</span>
+      </div>
+
+      <div id="gemini-key-field" class="field">
+        <label for="gemini-key">Gemini API key</label>
+        <div class="field-row">
+          <input type="password" id="gemini-key" autocomplete="off" placeholder="AIza..." />
+          <button type="button" class="btn btn--sm" data-toggle-visibility="gemini-key">Show</button>
+        </div>
+      </div>
+
+      <div id="claude-key-field" class="field">
+        <label for="claude-key">Claude API key</label>
+        <div class="field-row">
+          <input type="password" id="claude-key" autocomplete="off" placeholder="sk-ant-..." />
+          <button type="button" class="btn btn--sm" data-toggle-visibility="claude-key">Show</button>
+        </div>
+      </div>
+
+      <h3 class="section-title">Telegram Alerts (automatic)</h3>
+      <p class="helper">1. Message <strong>@BotFather</strong> on Telegram, send <code>/newbot</code>, copy the token.<br />
+        2. Message your new bot once, then visit
+        <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code> to find your chat id.</p>
+
+      <div class="field">
+        <label for="telegram-token">Bot token</label>
+        <input type="password" id="telegram-token" autocomplete="off" />
+      </div>
+
+      <div class="field">
+        <label for="telegram-chatid">Chat ID</label>
+        <input type="text" id="telegram-chatid" autocomplete="off" />
+      </div>
+
+      <div class="field-row">
+        <button id="test-telegram-btn" class="btn btn--sm" type="button">Send Test Alert</button>
+        <span id="telegram-test-result" class="helper" style="align-self:center;"></span>
+      </div>
+
+      <h3 class="section-title">Device</h3>
+      <div class="toggle-row">
+        <label for="wake-lock-toggle">Keep screen on during session</label>
+        <input type="checkbox" id="wake-lock-toggle" />
+      </div>
+      <div class="toggle-row">
+        <label for="reduced-motion-toggle">Reduce motion</label>
+        <input type="checkbox" id="reduced-motion-toggle" />
+      </div>
+    </section>
+
+    <!-- ===== CONTACTS SCREEN ===== -->
+    <section id="screen-contacts" class="screen" data-screen="contacts" aria-label="Emergency Contacts">
+      <h2>Emergency Contacts</h2>
+      <p class="helper">Used for the one-tap SOS text button during a Critical Drowsy alert.</p>
+
+      <div id="contact-list"></div>
+
+      <h3 class="section-title">Add contact</h3>
+      <form id="add-contact-form">
+        <div class="field">
+          <label for="contact-name">Name</label>
+          <input type="text" id="contact-name" required autocomplete="name" />
+        </div>
+        <div class="field">
+          <label for="contact-phone">Phone number</label>
+          <input type="tel" id="contact-phone" required autocomplete="tel" placeholder="+1 555 555 5555" />
+        </div>
+        <button type="submit" class="btn btn--primary">Add Contact</button>
+      </form>
+    </section>
+
+  </main>
+
+  <nav class="bottom-nav" aria-label="Primary">
+    <button class="nav-btn" data-screen="monitor" aria-current="true" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+      Monitor
+    </button>
+    <button class="nav-btn" data-screen="dashboard" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="12" width="4" height="9"></rect><rect x="10" y="7" width="4" height="14"></rect><rect x="17" y="3" width="4" height="18"></rect></svg>
+      Dashboard
+    </button>
+    <button class="nav-btn" data-screen="settings" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+      Settings
+    </button>
+    <button class="nav-btn" data-screen="contacts" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+      Contacts
+    </button>
+  </nav>
+
+  <div id="toast"></div>
+
+  <!-- Permission explainer overlay -->
+  <div id="permission-overlay" class="overlay">
+    <div class="overlay__card">
+      <h2>Before we start</h2>
+      <p>GoPal needs a few permissions to watch for drowsiness and reach your contacts if something's wrong:</p>
+      <ul>
+        <li><strong>Camera</strong> — watches your eyes/face on-device. Video never leaves your phone.</li>
+        <li><strong>Microphone</strong> — lets the assistant hear your check-in replies.</li>
+        <li><strong>Location</strong> — included in alerts so contacts know where you are.</li>
+      </ul>
+      <p class="helper">You can decline any of these — GoPal will run with reduced functionality (e.g. no voice check-ins without mic, no location in alerts).</p>
+      <button id="permission-continue-btn" class="btn btn--primary" type="button">Enable &amp; Start</button>
+      <button id="permission-cancel-btn" class="btn btn--ghost btn--block" type="button" style="margin-top:8px;">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Calibration overlay -->
+  <div id="calibration-overlay" class="overlay">
+    <div class="overlay__card">
+      <h2>Calibrating</h2>
+      <p>Look at the screen with your eyes open for 5 seconds.</p>
+      <div class="calibration-progress"><div id="calibration-bar" class="calibration-progress__bar"></div></div>
+      <button id="calibration-skip-btn" class="btn btn--ghost btn--block" type="button">Skip</button>
+    </div>
+  </div>
+
+</div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
