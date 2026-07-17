@@ -1,0 +1,5 @@
+# Local Netlify folder
+.netlify
+
+# Test tooling
+node_modules/

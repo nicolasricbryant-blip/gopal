@@ -5,15 +5,11 @@ import {
   FilesetResolver,
   FaceLandmarker,
 } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+import { LEFT_EYE, RIGHT_EYE, computeEAR, computeMAR } from './facemath.js';
 
 const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
 const MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
-
-// Landmark index groups per PLAN.md.
-const LEFT_EYE = [33, 160, 158, 133, 153, 144];   // p1..p6
-const RIGHT_EYE = [362, 385, 387, 263, 373, 380]; // p1..p6
-const MOUTH = { upper: 13, lower: 14, leftCorner: 78, rightCorner: 308 };
 
 const DEFAULT_EAR_THRESHOLD = 0.21;
 const CALIBRATION_RATIO = 0.75; // threshold = 75% of baseline open-eye EAR
@@ -24,25 +20,6 @@ const YAWN_SUSTAIN_MS = 1500;
 const NO_FACE_TIMEOUT_MS = 3000;
 const BLINK_SCORE_THRESHOLD = 0.5;
 const TARGET_FRAME_INTERVAL_MS = 1000 / 15; // >=15 FPS processing target
-
-function dist(a, b) {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-function computeEAR(lm, idx) {
-  const [p1, p2, p3, p4, p5, p6] = idx.map((i) => lm[i]);
-  return (dist(p2, p6) + dist(p3, p5)) / (2 * dist(p1, p4));
-}
-
-function computeMAR(lm) {
-  const upper = lm[MOUTH.upper];
-  const lower = lm[MOUTH.lower];
-  const left = lm[MOUTH.leftCorner];
-  const right = lm[MOUTH.rightCorner];
-  return dist(upper, lower) / dist(left, right);
-}
 
 export class Detector {
   /** @param {HTMLVideoElement} videoEl */
@@ -55,6 +32,8 @@ export class Detector {
     this.lastFrameTs = 0;
 
     this.earThreshold = DEFAULT_EAR_THRESHOLD;
+    this._calibrating = false;
+    this._calibrateCancelled = false;
 
     // Rolling windows: array of { t: msEpoch, closed: bool }
     this.perclosWindow = [];
@@ -121,10 +100,20 @@ export class Detector {
     if (!this.landmarker) throw new Error('Detector not initialized.');
     const samples = [];
     const startedAt = performance.now();
+    this._calibrating = true;
+    this._calibrateCancelled = false;
     return new Promise((resolve, reject) => {
       const step = () => {
+        // Cancelled mid-loop (skip button, or app.js needed the main detection
+        // loop back): resolve with the current threshold, unchanged, and stop.
+        if (this._calibrateCancelled) {
+          this._calibrating = false;
+          resolve(this.earThreshold);
+          return;
+        }
         const elapsed = (performance.now() - startedAt) / 1000;
         if (elapsed >= durationSec) {
+          this._calibrating = false;
           if (samples.length === 0) {
             resolve(this.earThreshold); // no face seen; keep default
             return;
@@ -144,6 +133,7 @@ export class Detector {
           }
           onTick?.(elapsed / durationSec);
         } catch (err) {
+          this._calibrating = false;
           reject(err);
           return;
         }
@@ -151,6 +141,11 @@ export class Detector {
       };
       requestAnimationFrame(step);
     });
+  }
+
+  /** Cancel an in-flight calibrate() loop without touching earThreshold. */
+  cancelCalibration() {
+    this._calibrateCancelled = true;
   }
 
   /**
@@ -239,6 +234,9 @@ export class Detector {
       const perclos = this.perclosWindow.length
         ? (100 * this.perclosWindow.filter((s) => s.closed).length) / this.perclosWindow.length
         : 0;
+      // Actual span covered by the window so far — lets the FSM ignore PERCLOS
+      // as a critical signal until it's had time to accumulate enough samples.
+      const perclosWindowSpanMs = this.perclosWindow.length ? nowMs - this.perclosWindow[0].t : 0;
 
       // Yawn rate per minute (rolling 60s window == direct per-minute count).
       while (this.yawnEvents.length && nowMs - this.yawnEvents[0] > YAWN_WINDOW_MS) {
@@ -252,6 +250,7 @@ export class Detector {
         ear,
         mar,
         perclos,
+        perclosWindowSpanMs,
         yawnsPerMin,
         yawnTotal: this._yawnTotalCount(),
         blinkCount: this.blinkCount,

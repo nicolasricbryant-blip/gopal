@@ -117,8 +117,9 @@ export class SpeechListener {
 // ---- Text-to-speech ----
 
 export class SpeechSpeaker {
-  constructor(rate = 1.0) {
+  constructor(rate = 1.0, volume = 1.0) {
     this.rate = rate;
+    this.volume = volume;
     this.supported = 'speechSynthesis' in window;
   }
 
@@ -145,6 +146,7 @@ export class SpeechSpeaker {
       window.speechSynthesis.cancel();
       const utter = new SpeechSynthesisUtterance(text);
       utter.rate = this.rate;
+      utter.volume = this.volume ?? 1;
       utter.lang = lang;
       const voice = this._pickVoice(lang);
       if (voice) utter.voice = voice;
@@ -161,6 +163,31 @@ export class SpeechSpeaker {
 }
 
 // ---- LLM adapters ----
+
+/**
+ * Sanitizes conversation history for the Claude/Gemini APIs, both of which
+ * require the first message in a turn to be from the user:
+ * (1) drop any leading assistant messages until the first user message (an
+ *     all-assistant history collapses to []);
+ * (2) merge consecutive same-role messages by joining their text with '\n',
+ *     since the APIs also reject adjacent same-role turns.
+ * Pure function — does not mutate `history`.
+ */
+export function buildProviderHistory(history) {
+  let start = 0;
+  while (start < history.length && history[start].role === 'assistant') start++;
+
+  const merged = [];
+  for (const msg of history.slice(start)) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === msg.role) {
+      last.text = `${last.text}\n${msg.text}`;
+    } else {
+      merged.push({ role: msg.role, text: msg.text });
+    }
+  }
+  return merged;
+}
 
 function withTimeout(promise, ms) {
   return Promise.race([
@@ -223,10 +250,10 @@ async function callClaude(apiKey, history, userText) {
 // ---- Conversation manager ----
 
 export class Assistant {
-  /** @param {{ provider: string, geminiKey: string, claudeKey: string, lang: string, ttsRate: number }} config */
+  /** @param {{ provider: string, geminiKey: string, claudeKey: string, lang: string, ttsRate: number, volume?: number }} config */
   constructor(config) {
     this.config = config;
-    this.speaker = new SpeechSpeaker(config.ttsRate);
+    this.speaker = new SpeechSpeaker(config.ttsRate, config.volume ?? 1.0);
     this.listener = new SpeechListener(config.lang);
     this.history = [];
     this._lastScriptedIdx = null;
@@ -235,6 +262,7 @@ export class Assistant {
   updateConfig(config) {
     this.config = { ...this.config, ...config };
     this.speaker.rate = this.config.ttsRate;
+    this.speaker.volume = this.config.volume ?? 1.0;
     this.listener.lang = this.config.lang;
   }
 
@@ -260,7 +288,10 @@ export class Assistant {
         const key = this.config.provider === 'gemini' ? this.config.geminiKey : this.config.claudeKey;
         if (!key) throw new Error('No API key configured.');
         const caller = this.config.provider === 'gemini' ? callGemini : callClaude;
-        spoken = await withTimeout(caller(key, this.history, 'Check in with the driver now.'), LLM_TIMEOUT_MS);
+        spoken = await withTimeout(
+          caller(key, buildProviderHistory(this.history), 'Check in with the driver now.'),
+          LLM_TIMEOUT_MS
+        );
         source = 'llm';
       } catch (err) {
         console.warn('[assistant] LLM call failed, using scripted fallback', err.message);
@@ -292,7 +323,10 @@ export class Assistant {
       try {
         const key = this.config.provider === 'gemini' ? this.config.geminiKey : this.config.claudeKey;
         const caller = this.config.provider === 'gemini' ? callGemini : callClaude;
-        reply = await withTimeout(caller(key, this.history, heard), LLM_TIMEOUT_MS);
+        // this.history already ends with the just-pushed {role:'user', text: heard}
+        // (see the push below the listener) — slice it off since `heard` is
+        // passed separately as userText, or it would be sent to the LLM twice.
+        reply = await withTimeout(caller(key, buildProviderHistory(this.history.slice(0, -1)), heard), LLM_TIMEOUT_MS);
       } catch (err) {
         console.warn('[assistant] LLM follow-up failed', err.message);
         reply = "Thanks for the reply — stay with me.";

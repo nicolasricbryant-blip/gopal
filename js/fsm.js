@@ -23,8 +23,22 @@ const EYES_CLOSED_WARNING_SEC = 2.0;
 const EYES_CLOSED_CRITICAL_SEC = 4.0;
 const EYES_OPEN_RECOVERY_SEC = 10.0;
 const PERCLOS_CRITICAL_PCT = 15;
+// PERCLOS is a fraction of a rolling window; early in a session the window is
+// tiny, so a couple seconds of closure can spike the percentage past the
+// critical threshold. Require the window to have accumulated enough span
+// before letting PERCLOS alone drive an escalation.
+const PERCLOS_MIN_WINDOW_MS = 30_000;
 const YAWN_RATE_CRITICAL_PER_MIN = 3;
 const NO_FACE_WARNING_SEC = 3.0;
+// Same one-frame-escalation class of bug as EYES_CLOSED_CRITICAL_SEC above:
+// no-face needs its own, longer threshold so WARNING doesn't escalate to
+// CRITICAL on the very next frame after crossing the 3s warning mark.
+const NO_FACE_CRITICAL_SEC = 6.0;
+// If the update loop was suspended (tab hidden, rAF paused) for longer than
+// this, treat it as a gap rather than continuous closure/no-face duration —
+// otherwise resuming after a long hide falsely reports the eyes/face as
+// having been closed/lost the entire time the tab was backgrounded.
+const UPDATE_GAP_RESET_MS = 2000;
 
 export class DrowsinessFSM extends EventTarget {
   constructor() {
@@ -35,6 +49,7 @@ export class DrowsinessFSM extends EventTarget {
     this.eyesOpenSince = performance.now();
     this.noFaceSince = null;
     this.lastVocalResponseAt = null;
+    this.lastUpdateAt = performance.now();
   }
 
   _setState(next, reason) {
@@ -52,13 +67,26 @@ export class DrowsinessFSM extends EventTarget {
    * @param {object} sample
    *   sample.eyesClosed: boolean
    *   sample.faceDetected: boolean
-   *   sample.perclos: number (0-100, rolling 60s window)
+   *   sample.perclos: number (0-100, rolling window)
+   *   sample.perclosWindowSpanMs: number — actual span covered by the PERCLOS
+   *     window so far; PERCLOS is ignored as a critical signal until this
+   *     reaches PERCLOS_MIN_WINDOW_MS (else the ratio is noisy early on).
    *   sample.yawnsPerMin: number
    *   sample.nowMs: number (performance.now() at sample time)
    */
   update(sample) {
     const now = sample.nowMs ?? performance.now();
     const { eyesClosed, faceDetected, perclos, yawnsPerMin } = sample;
+
+    // If the loop was suspended (tab hidden, rAF paused) for a while, don't
+    // let the gap masquerade as continuous eyes-closed/no-face duration on
+    // resume — reset the trackers to "now" so this frame reads as 0 duration.
+    if (now - this.lastUpdateAt > UPDATE_GAP_RESET_MS) {
+      this.eyesClosedSince = now;
+      this.eyesOpenSince = now;
+      this.noFaceSince = now;
+    }
+    this.lastUpdateAt = now;
 
     // Track no-face duration -> treated as attention loss.
     if (!faceDetected) {
@@ -80,9 +108,12 @@ export class DrowsinessFSM extends EventTarget {
     const openDurationSec = this.eyesOpenSince !== null ? (now - this.eyesOpenSince) / 1000 : 0;
 
     const attentionLost = noFaceDurationSec >= NO_FACE_WARNING_SEC;
+    const noFaceCritical = noFaceDurationSec >= NO_FACE_CRITICAL_SEC;
     const closedPastWarning = closedDurationSec >= EYES_CLOSED_WARNING_SEC;
     const closedPastCritical = closedDurationSec >= EYES_CLOSED_CRITICAL_SEC;
-    const criticalSignal = closedPastCritical || perclos >= PERCLOS_CRITICAL_PCT || yawnsPerMin >= YAWN_RATE_CRITICAL_PER_MIN;
+    const perclosWindowSpanMs = sample.perclosWindowSpanMs ?? Infinity;
+    const perclosCritical = perclos >= PERCLOS_CRITICAL_PCT && perclosWindowSpanMs >= PERCLOS_MIN_WINDOW_MS;
+    const criticalSignal = closedPastCritical || perclosCritical || yawnsPerMin >= YAWN_RATE_CRITICAL_PER_MIN;
     const recovered = openDurationSec >= EYES_OPEN_RECOVERY_SEC && !attentionLost;
 
     switch (this.state) {
@@ -93,8 +124,8 @@ export class DrowsinessFSM extends EventTarget {
         break;
 
       case STATE.WARNING:
-        if (criticalSignal || attentionLost) {
-          this._setState(STATE.CRITICAL, attentionLost ? 'no-face-sustained' : 'closure-sustained-or-perclos-or-yawn');
+        if (criticalSignal || noFaceCritical) {
+          this._setState(STATE.CRITICAL, noFaceCritical ? 'no-face-sustained' : 'closure-sustained-or-perclos-or-yawn');
         } else if (recovered) {
           this._setState(STATE.ALERT, 'recovered');
         }
@@ -134,5 +165,6 @@ export class DrowsinessFSM extends EventTarget {
     this.eyesOpenSince = performance.now();
     this.noFaceSince = null;
     this.lastVocalResponseAt = null;
+    this.lastUpdateAt = performance.now();
   }
 }

@@ -1,7 +1,7 @@
 // sw.js — service worker: cache-first app shell + MediaPipe wasm/model for offline use.
 // Versioned cache name — bump CACHE_VERSION whenever shell files change.
 
-const CACHE_VERSION = 'gopal-v3';
+const CACHE_VERSION = 'gopal-v4';
 const SHELL_FILES = [
   './',
   './index.html',
@@ -10,6 +10,7 @@ const SHELL_FILES = [
   './js/app.js',
   './js/camera.js',
   './js/detector.js',
+  './js/facemath.js',
   './js/fsm.js',
   './js/assistant.js',
   './js/alerts.js',
@@ -68,10 +69,18 @@ self.addEventListener('fetch', (event) => {
     return; // let the browser handle it normally (network only)
   }
 
+  // Match shell files by pathname on same-origin requests only — matching the
+  // raw request URL with endsWith() could otherwise match a cross-origin URL
+  // that happens to share a trailing path segment (e.g. a third-party script
+  // named the same as one of ours).
   // Note: the './' root entry must be excluded — it maps to the empty string,
-  // and url.endsWith('') is true for every URL, which would force ALL requests
-  // through cacheFirst. The root document is matched by its trailing slash below.
-  const isShellFile = url.endsWith('/') || SHELL_FILES.some((f) => f !== './' && url.endsWith(f.replace('./', '')));
+  // and pathname.endsWith('') is true for every path, which would force ALL
+  // same-origin requests through cacheFirst. The root document is matched by
+  // its trailing slash below instead.
+  const u = new URL(request.url);
+  const isShellFile =
+    u.origin === self.location.origin &&
+    (u.pathname.endsWith('/') || SHELL_FILES.some((f) => f !== './' && u.pathname.endsWith(f.replace('./', ''))));
   if (isMediaPipeAsset(url) || isGoogleFontAsset(url) || isShellFile) {
     event.respondWith(cacheFirst(request));
     return;
@@ -82,8 +91,10 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(request)
       .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE_VERSION).then((cache) => cache.put(request, copy)).catch(() => {});
+        if (res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE_VERSION).then((cache) => cache.put(request, copy)).catch(() => {});
+        }
         return res;
       })
       .catch(() => caches.match(request))
@@ -95,8 +106,10 @@ async function cacheFirst(request) {
   if (cached) return cached;
   try {
     const res = await fetch(request);
-    const cache = await caches.open(CACHE_VERSION);
-    cache.put(request, res.clone()).catch(() => {});
+    if (res.ok) {
+      const cache = await caches.open(CACHE_VERSION);
+      cache.put(request, res.clone()).catch(() => {});
+    }
     return res;
   } catch (err) {
     return cached || Response.error();

@@ -176,7 +176,7 @@ function applySettingsToForm(settings) {
 }
 
 function updateCalibrationStatus(settings) {
-  els.calibrationStatus.textContent = settings.calibrated
+  els.calibrationStatus.textContent = settings.calibrated && typeof settings.earThreshold === 'number'
     ? `Calibrated — threshold ${settings.earThreshold.toFixed(3)}`
     : 'Not calibrated — using default threshold.';
 }
@@ -206,7 +206,10 @@ function initSettingsForm() {
     persist({ ttsRate: parseFloat(els.ttsRate.value) });
     assistant?.updateConfig({ ttsRate: parseFloat(els.ttsRate.value) });
   });
-  els.volume.addEventListener('change', () => persist({ volume: parseFloat(els.volume.value) }));
+  els.volume.addEventListener('change', () => {
+    persist({ volume: parseFloat(els.volume.value) });
+    assistant?.updateConfig({ volume: parseFloat(els.volume.value) });
+  });
   els.llmProvider.addEventListener('change', () => {
     updateLlmFieldVisibility();
     persist({ llmProvider: els.llmProvider.value });
@@ -382,13 +385,24 @@ async function runCalibrationFlow() {
 }
 
 async function calibrateNow() {
+  // Recalibrating mid-session would otherwise run calibrate()'s rAF loop
+  // concurrently with the main detection loop — two detectForVideo calls per
+  // frame on one landmarker, which can throw (MediaPipe VIDEO mode requires
+  // monotonically increasing timestamps). Pause the main loop for the
+  // duration of calibration and only resume it if a session is still active
+  // (first-session calibration runs before detector.start(), so there's
+  // nothing to restart there).
+  const wasRunning = detector.running;
+  if (wasRunning) detector.stop();
+
   els.calibrationOverlay.classList.add('overlay--visible');
   els.calibrationBar.style.width = '0%';
 
-  return new Promise((resolve) => {
+  await new Promise((resolve) => {
     let skipped = false;
     els.calibrationSkipBtn.onclick = () => {
       skipped = true;
+      detector.cancelCalibration();
       els.calibrationOverlay.classList.remove('overlay--visible');
       resolve();
     };
@@ -410,6 +424,8 @@ async function calibrateNow() {
         resolve();
       });
   });
+
+  if (wasRunning && sessionActive) detector.start(onDetectorSample);
 }
 
 // ===========================================================================
@@ -462,6 +478,7 @@ async function startSession() {
     claudeKey: settings.claudeKey,
     lang: settings.sttLang,
     ttsRate: settings.ttsRate,
+    volume: settings.volume,
   });
 
   beepPlayer = beepPlayer || new BeepPlayer();
@@ -657,7 +674,13 @@ async function triggerCriticalAlerts() {
 
   const text = buildAlertMessage({ driverName: settings.driverName, locationLink });
   const result = await sendTelegramAlert({ token: settings.telegramToken, chatId: settings.telegramChatId, text });
-  metrics.markEnd('alert', 'alert');
+  if (result.ok) {
+    metrics.markEnd('alert', 'alert');
+  } else {
+    // Unconfigured/failed send — don't let a no-op or the 6s location timeout
+    // pollute the alert latency stat.
+    metrics.cancel('alert');
+  }
   dashboard.logEvent('Telegram alert', result.ok ? 'sent' : `failed: ${result.error || result.status}`);
 
   const contacts = storage.getContacts();

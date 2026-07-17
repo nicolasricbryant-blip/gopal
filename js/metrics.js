@@ -46,6 +46,13 @@ export class MetricsLog {
     return elapsedSec;
   }
 
+  // Call to discard a pending interval without recording a latency sample —
+  // e.g. the alert send was skipped or failed, so the elapsed time would
+  // pollute the mean with a no-op or a timeout duration instead of real latency.
+  cancel(key) {
+    this.pending.delete(key);
+  }
+
   mean(arr) {
     if (!arr || arr.length === 0) return null;
     return arr.reduce((a, b) => a + b, 0) / arr.length;
