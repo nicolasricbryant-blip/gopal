@@ -99,5 +99,8 @@ shows the wrong project.
 1. Bump `CACHE_VERSION` in `sw.js` (service worker caches aggressively —
    phones won't see new code otherwise).
 2. `git add -A && git commit && git push` → Pages auto-rebuilds.
-3. `netlify deploy --prod --dir . --site a4d93b50-be14-47e6-912c-d4594a1c0c45`
-   → Netlify (manual, not auto-linked to git push).
+3. Netlify (manual, not auto-linked to git push). Since vitest was added,
+   `--dir .` would upload node_modules — deploy a clean copy of HEAD:
+   `git archive HEAD | tar -x -C <tmpdir>` then
+   `netlify deploy --prod --dir <tmpdir> --site a4d93b50-be14-47e6-912c-d4594a1c0c45`
+4. Run `npm test` before deploying — 23 tests must stay green.
